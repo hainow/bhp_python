@@ -12,6 +12,7 @@ Use this script as an example to build your own tool
 import argparse
 import os
 import time
+import pdb
 
 from google.protobuf import text_format
 import numpy as np
@@ -110,7 +111,7 @@ def load_image(path, height, width, mode='RGB'):
     image = scipy.misc.imresize(image, (height, width), 'bilinear')
     return image
 
-def forward_pass(images, net, transformer, batch_size=256):
+def forward_pass(images, net, transformer, batch_size=None):
     """
     Returns scores for each image as an np.ndarray (nImages x nClasses)
 
@@ -181,6 +182,7 @@ def label_to_idx(labels):
     return l_to_i
 
 def get_img_paths_and_labels(test_file):
+    ''' generator version'''
     test_paths, test_indices = [], []
     with open(test_file) as f:
         for line in f:
@@ -188,26 +190,11 @@ def get_img_paths_and_labels(test_file):
             # process path
             path = fields[0]
             assert(os.path.isfile(path))
-            test_paths.append(path)
-            # and update label index
-            test_indices.append(int(fields[1]))
-
-    return test_paths, test_indices
-
-# def get_img_paths_and_labels(test_file):
-#     ''' generator version'''
-#     test_paths, test_indices = [], []
-#     with open(test_file) as f:
-#         for line in f:
-#             fields = line.strip().split()
-#             # process path
-#             path = fields[0]
-#             assert(os.path.isfile(path))
-#             yield (path, int(fields[1]))
+            yield (path, int(fields[1]))
 
 
 def classify(caffemodel, deploy_file, test_file,
-        mean_file=None, labels_file=None, batch_size=256, use_gpu=True):
+        mean_file=None, labels_file=None, batch_size=None, use_gpu=True):
     """
     Classify some images against a Caffe model and print the results
 
@@ -233,70 +220,46 @@ def classify(caffemodel, deploy_file, test_file,
         raise ValueError('Invalid number for channels: %s' % channels)
 
 
+    print ("Getting labels...")
     labels = read_labels(labels_file)
-    test_paths, test_indices = get_img_paths_and_labels(test_file)
-    # get 2 lists which are associated to each other
-    test_images = [load_image(image_file, height, width, mode) for image_file in test_paths]
-    test_labels = [labels[i] for i in test_indices]
-    test_len = len(test_labels)
-
-    print "test label indices"
-    print test_indices
+    print ("Getting labels is complete. \n")
 
     # Classify the image
-    scores = forward_pass(test_images, net, transformer, batch_size=batch_size)
+    f = open("result.txt", 'w')
+    print("Predicting...")
+    top1, top5, count = 0, 0, 0
+    for img, test_idx in get_img_paths_and_labels(test_file):
+        count += 1
+        f.write(str(count) + '\t' + img + '\t\tlabel: ' + labels[test_idx] + '\n')
+        f.write('-----------------------------------------------------------\n')
 
-    ### Process the results
 
-    indices = (-scores).argsort()[:, :5] # take top 5 results
-    # indices = (-scores).argsort()[:, :1] # take top 1 results ONLY
+        test_img = load_image(img, height, width, mode)
+        score = forward_pass([test_img], net, transformer, batch_size=batch_size)
+        top5_results = (-score).argsort()[:, :5][0] # top 5 for this image
 
-    classifications = []
-    top1, top5 = 0, 0
-    count = 1
-    for image_index, index_list in enumerate(indices): # e.g. 0 [13 36  5 25 34]
-        # print image_index, index_list
-        result = []
-        for i in index_list:
-            # 'i' is a category in labels and also an index into scores
-            if labels is None:
-                label = 'Class #%s' % i
-            else:
-                label = labels[i]
-            result.append((label, round(100.0*scores[image_index, i],4)))
-        classifications.append(result)
+        for i in top5_results:
+            # print(round(score[0, i]*100, 4)), # confidence
+            f.write('\t' + labels[i] + '\t' + str(round(score[0, i]*100, 4)) + '%\n')
+        f.write('\n')
+        # print top5_results
 
-        # populate top 1
-        if index_list[0] == test_indices[image_index]:
+        if test_idx == top5_results[0]:
             top1 += 1
-        # populate top 5
-        if test_indices[image_index] in index_list:
+            top5 += 1
+        elif test_idx in top5_results[1:]:
             top5 += 1
 
-        count += 1
+        if count % 100 == 0:
+            print('\n{} images predicted! '.format(count))
+            print('\t\tCurrent top1 = {}, acc = {}'.format(top1, float(top1) / count * 100))
+            print('\t\tCurrent top5 = {}, acc = {}'.format(top5, float(top5) / count * 100))
 
-        if count % 1000 == 0:
-            print('At sample of {}'.format(count))
-            print('Current top1 = {}, acc = {}'.format(top1, float(top1)/count * 100))
-            print('Current top5 = {}, acc = {}'.format(top5, float(top5) / count * 100))
+    print("Prediction is done for {} images! ".format(count))
 
     print("\n\nSUMMARY:\n----------\n Top 1 = {}\t(acc={} %) \n Top 5 = {}\t(acc={} %)".
-          format(top1, float(top1)/test_len * 100, top5, float(top5)/test_len * 100))
-    print("\nResult is written into file: result.txt\n\n")
+          format(top1, float(top1)/count * 100, top5, float(top5)/count * 100))
 
-    # write to result.txt
-    f = open('result.txt', 'w')
-    for index, classification in enumerate(classifications):
-        # print '{:-^80}'.format(' Prediction for %s ' % test_paths[index])
-        # print '{:-^80}'.format('(label = %s)' % test_labels[index])
-        f.write(test_paths[index] + ', label: ' + test_labels[index] + '\n')
-        f.write('-------------------------------------------------\n')
-        for label, confidence in classification:
-            # print '{:9.4%}\t{}'.format(confidence/100.0, label)
-            f.write('\t' + label + '\t' + str(confidence) + '%\n')
-        f.write('\n\n')
-        # print
-    f.close()
 
 def main():
     script_start_time = time.time()
@@ -351,5 +314,5 @@ def test():
 
 
 if __name__ == '__main__':
-    # main()
-    test()
+    main()
+    # test()
