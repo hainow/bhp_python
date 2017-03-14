@@ -230,8 +230,8 @@ def classify(caffemodel, deploy_file, test_file,
     top1, top5, count = 0, 0, 0
     for img, test_idx in get_img_paths_and_labels(test_file):
         count += 1
-        f.write(str(count) + '\t' + img + '\t\tlabel: ' + labels[test_idx] + '\n')
-        f.write('-----------------------------------------------------------\n')
+        f.write(str(count) + '\t' + img + '\tlabel: ' + labels[test_idx] + '\n')
+        f.write('--------------------------------------------------------------------------------\n')
 
 
         test_img = load_image(img, height, width, mode)
